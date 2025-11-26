@@ -428,7 +428,7 @@ func (m *model) loadSelectedToViewport() {
 			Foreground(mutedColor).
 			Italic(true).
 			Align(lipgloss.Center).
-			Render("📂 No projects available\n\nPress 'a' to add your first project"))
+			Render("No projects available\n\nPress 'a' to add your first project"))
 		return
 	}
 	idx := m.filteredIdxs[m.cursor]
@@ -437,27 +437,27 @@ func (m *model) loadSelectedToViewport() {
 	var content strings.Builder
 
 	// Project name with icon
-	content.WriteString(detailLabelStyle.Render("📦 Project Name") + "\n")
+	content.WriteString(detailLabelStyle.Render("Project Name") + "\n")
 	content.WriteString(detailValueStyle.Render(p.Name) + "\n")
 	content.WriteString(dividerStyle.Render("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━") + "\n")
 
 	if p.Tag != "" {
-		content.WriteString(detailLabelStyle.Render("🏷️  Tag") + "\n")
+		content.WriteString(detailLabelStyle.Render("  Tag") + "\n")
 		content.WriteString(tagStyle.Render("# "+p.Tag) + "\n")
 		content.WriteString(dividerStyle.Render("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━") + "\n")
 	}
 
-	content.WriteString(detailLabelStyle.Render("📁 Path") + "\n")
+	content.WriteString(detailLabelStyle.Render(" Path") + "\n")
 	content.WriteString(pathStyle.Render(p.Path) + "\n")
 	content.WriteString(dividerStyle.Render("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━") + "\n")
 
 	if p.Description != "" {
-		content.WriteString(detailLabelStyle.Render("📝 Description") + "\n")
+		content.WriteString(detailLabelStyle.Render(" Description") + "\n")
 		content.WriteString(detailValueStyle.Render(p.Description) + "\n")
 		content.WriteString(dividerStyle.Render("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━") + "\n")
 	}
 
-	content.WriteString(detailLabelStyle.Render("🕐 Timeline") + "\n")
+	content.WriteString(detailLabelStyle.Render(" Timeline") + "\n")
 	content.WriteString(lipgloss.NewStyle().Foreground(mutedColor).Render(
 		fmt.Sprintf("Created:  %s\nModified: %s",
 			p.CreatedAt.Format("Jan 02, 2006 15:04"),
@@ -508,7 +508,7 @@ func validatePath(path string) string {
 	}
 
 	if !info.IsDir() {
-		return "⚠ Path is not a directory"
+		return " Path is not a directory"
 	}
 
 	return ""
@@ -943,7 +943,7 @@ func (m model) View() string {
 			Bold(true).
 			MarginTop(2).
 			MarginLeft(2).
-			Render("⚡ Loading Project Phonebook...")
+			Render(" Loading Project Phonebook...")
 	}
 
 	if m.mode == viewAdd {
@@ -962,7 +962,7 @@ func (m model) View() string {
 
 		b.WriteString(header + "\n\n")
 
-		labels := []string{"📦 Project Name", "📁 Project Path", "🏷️  Tags", "📝 Description"}
+		labels := []string{" Project Name", " Project Path", "  Tags", " Description"}
 		for i, input := range m.addInputs {
 			b.WriteString(labelStyle.Render(labels[i]) + "\n")
 			b.WriteString(input.View() + "\n")
@@ -975,7 +975,7 @@ func (m model) View() string {
 				b.WriteString(lipgloss.NewStyle().
 					Foreground(mutedColor).
 					Italic(true).
-					Render(fmt.Sprintf("  💡 %d matches - press tab again to cycle", len(m.autocompleteOpts))) + "\n")
+					Render(fmt.Sprintf("   %d matches - press tab again to cycle", len(m.autocompleteOpts))) + "\n")
 
 				maxShow := 5
 				if len(m.autocompleteOpts) < maxShow {
@@ -1024,7 +1024,7 @@ func (m model) View() string {
 	var b strings.Builder
 
 	// Header with counter
-	header := titleStyle.Render("📚 Project Phonebook")
+	header := titleStyle.Render(" Project Phonebook")
 	count := counterStyle.Render(fmt.Sprintf("%d", len(m.projects)))
 	if m.filterQuery != "" {
 		filteredCount := counterStyle.Render(fmt.Sprintf("%d/%d", len(m.filteredIdxs), len(m.projects)))
@@ -1042,7 +1042,7 @@ func (m model) View() string {
 		activeFilter := lipgloss.NewStyle().
 			Foreground(mutedColor).
 			Italic(true).
-			Render("🔍 Filter: " + m.filterQuery + " (press / to edit)")
+			Render(" Filter: " + m.filterQuery + " (press / to edit)")
 		b.WriteString(activeFilter + "\n\n")
 	}
 
