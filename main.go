@@ -975,70 +975,22 @@ func truncate(s string, max int) string {
 }
 
 func openProjectCmd(path string) tea.Cmd {
-	return func() tea.Msg {
-		// Write debug info to a log file
-		logFile, _ := os.OpenFile("/tmp/phonebook-debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-		if logFile != nil {
-			defer logFile.Close()
-			fmt.Fprintf(logFile, "\n=== Opening project ===\n")
-			fmt.Fprintf(logFile, "Time: %s\n", time.Now().Format(time.RFC3339))
-			fmt.Fprintf(logFile, "Path: %s\n", path)
+	// Check if path exists first
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return func() tea.Msg {
+			return editorFinishedMsg{err: fmt.Errorf("path does not exist: %s", path)}
 		}
-
-		info, err := os.Stat(path)
-		if err != nil {
-			if logFile != nil {
-				fmt.Fprintf(logFile, "Stat error: %v\n", err)
-			}
-			return editorFinishedMsg{err: fmt.Errorf("path error: %v", err)}
-		}
-
-		if logFile != nil {
-			fmt.Fprintf(logFile, "IsDir: %v\n", info.IsDir())
-		}
-
-		editor := os.Getenv("EDITOR")
-		if editor == "" {
-			editor = "nvim"
-		}
-
-		if logFile != nil {
-			fmt.Fprintf(logFile, "Editor: %s\n", editor)
-		}
-
-		absPath, err := filepath.Abs(path)
-		if err != nil {
-			if logFile != nil {
-				fmt.Fprintf(logFile, "Abs path error: %v\n", err)
-			}
-			return editorFinishedMsg{err: err}
-		}
-
-		if logFile != nil {
-			fmt.Fprintf(logFile, "Abs path: %s\n", absPath)
-			fmt.Fprintf(logFile, "About to exec: %s %s\n", editor, absPath)
-		}
-
-		c := exec.Command(editor, absPath)
-		c.Stdin = os.Stdin
-		c.Stdout = os.Stdout
-		c.Stderr = os.Stderr
-
-		if logFile != nil {
-			fmt.Fprintf(logFile, "Calling tea.ExecProcess...\n")
-		}
-
-		return tea.ExecProcess(c, func(err error) tea.Msg {
-			// Log the callback
-			logFile2, _ := os.OpenFile("/tmp/phonebook-debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-			if logFile2 != nil {
-				defer logFile2.Close()
-				fmt.Fprintf(logFile2, "ExecProcess callback called\n")
-				fmt.Fprintf(logFile2, "Error: %v\n", err)
-			}
-			return editorFinishedMsg{err: err}
-		})
 	}
+
+	// Create the command
+	c := exec.Command("nvim", ".")
+	c.Dir = path // Set working directory to project path
+
+	// DON'T manually set Stdin/Stdout/Stderr - tea.ExecProcess handles it
+	// Return tea.ExecProcess directly
+	return tea.ExecProcess(c, func(err error) tea.Msg {
+		return editorFinishedMsg{err: err}
+	})
 }
 
 func main() {
