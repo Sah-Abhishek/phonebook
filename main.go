@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -25,23 +26,30 @@ type Project struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
+type fuzzyMatch struct {
+	index int
+	score int
+}
+
 var (
-	// Color palette
-	primaryColor   = lipgloss.Color("#7C3AED")
-	accentColor    = lipgloss.Color("#EC4899")
-	successColor   = lipgloss.Color("#10B981")
-	mutedColor     = lipgloss.Color("#6B7280")
-	brightColor    = lipgloss.Color("#F59E0B")
-	bgColor        = lipgloss.Color("#1F2937")
-	highlightColor = lipgloss.Color("#3B82F6")
-	warningColor   = lipgloss.Color("#F59E0B")
+	// Color palette - Enhanced
+	primaryColor   = lipgloss.Color("#A78BFA") // Lighter purple
+	accentColor    = lipgloss.Color("#F472B6") // Pink
+	successColor   = lipgloss.Color("#34D399") // Green
+	mutedColor     = lipgloss.Color("#9CA3AF") // Gray
+	brightColor    = lipgloss.Color("#FBBF24") // Amber
+	bgColor        = lipgloss.Color("#111827") // Darker bg
+	highlightColor = lipgloss.Color("#60A5FA") // Blue
+	warningColor   = lipgloss.Color("#FB923C") // Orange
+	textColor      = lipgloss.Color("#F3F4F6") // Light text
 
 	// Title styles
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(primaryColor).
 			MarginBottom(1).
-			MarginTop(1)
+			MarginTop(1).
+			Padding(0, 1)
 
 	subtitleStyle = lipgloss.NewStyle().
 			Foreground(mutedColor).
@@ -63,10 +71,11 @@ var (
 	selectedItemStyle = lipgloss.NewStyle().
 				Foreground(brightColor).
 				Bold(true).
-				PaddingLeft(1)
+				PaddingLeft(1).
+				Background(lipgloss.Color("#1F2937"))
 
 	normalItemStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#E5E7EB")).
+			Foreground(textColor).
 			PaddingLeft(3)
 
 	tagStyle = lipgloss.NewStyle().
@@ -76,6 +85,11 @@ var (
 	pathStyle = lipgloss.NewStyle().
 			Foreground(mutedColor).
 			Italic(true)
+
+	matchHighlightStyle = lipgloss.NewStyle().
+				Foreground(accentColor).
+				Bold(true).
+				Underline(true)
 
 	// Help and status styles
 	helpStyle = lipgloss.NewStyle().
@@ -115,26 +129,48 @@ var (
 				Background(primaryColor).
 				Padding(0, 3).
 				Bold(true).
-				MarginTop(1)
+				MarginTop(1).
+				BorderStyle(lipgloss.RoundedBorder()).
+				BorderForeground(primaryColor)
 
 	blurredButtonStyle = lipgloss.NewStyle().
 				Foreground(mutedColor).
 				Padding(0, 3).
-				MarginTop(1)
+				MarginTop(1).
+				BorderStyle(lipgloss.RoundedBorder()).
+				BorderForeground(mutedColor)
 
 	// Detail view styles
 	detailLabelStyle = lipgloss.NewStyle().
 				Foreground(primaryColor).
-				Bold(true)
+				Bold(true).
+				Underline(true)
 
 	detailValueStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#E5E7EB"))
+				Foreground(textColor).
+				MarginLeft(1)
 
 	// Divider
 	dividerStyle = lipgloss.NewStyle().
 			Foreground(mutedColor).
 			MarginTop(1).
 			MarginBottom(1)
+
+	// Filter box style
+	filterBoxStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(primaryColor).
+			Padding(0, 1).
+			Width(40).
+			Background(lipgloss.Color("#1F2937"))
+
+	// Counter badge style
+	counterStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FFFFFF")).
+			Background(highlightColor).
+			Padding(0, 1).
+			Bold(true).
+			MarginLeft(1)
 )
 
 type editorFinishedMsg struct{ err error }
@@ -161,8 +197,9 @@ type model struct {
 	mode             viewMode
 	addInputs        []textinput.Model
 	addFocusIndex    int
-	pathValidation   string   // Validation message for path field
-	autocompleteOpts []string // Autocomplete options
+	pathValidation   string
+	autocompleteOpts []string
+	filterQuery      string // Store current filter query
 }
 
 func initialModel() model {
@@ -171,10 +208,10 @@ func initialModel() model {
 	os.MkdirAll(filepath.Dir(projectsFile), 0o755)
 
 	ti := textinput.New()
-	ti.Placeholder = "Type to filter..."
-	ti.PlaceholderStyle = lipgloss.NewStyle().Foreground(mutedColor)
-	ti.PromptStyle = lipgloss.NewStyle().Foreground(primaryColor)
-	ti.TextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#E5E7EB"))
+	ti.Placeholder = "🔍 Type to search (fuzzy)..."
+	ti.PlaceholderStyle = lipgloss.NewStyle().Foreground(mutedColor).Italic(true)
+	ti.PromptStyle = lipgloss.NewStyle().Foreground(primaryColor).Bold(true)
+	ti.TextStyle = lipgloss.NewStyle().Foreground(textColor)
 	ti.CharLimit = 156
 	ti.Width = 38
 
@@ -182,8 +219,8 @@ func initialModel() model {
 	vp.SetContent("")
 
 	inputs := make([]textinput.Model, 4)
-	inputStyles := lipgloss.NewStyle().Foreground(lipgloss.Color("#E5E7EB"))
-	promptStyle := lipgloss.NewStyle().Foreground(primaryColor)
+	inputStyles := lipgloss.NewStyle().Foreground(textColor)
+	promptStyle := lipgloss.NewStyle().Foreground(primaryColor).Bold(true)
 
 	inputs[0] = textinput.New()
 	inputs[0].Placeholder = "My Awesome Project"
@@ -279,17 +316,93 @@ func (m *model) deleteProject(idx int) error {
 	return m.saveProjects()
 }
 
-func (m *model) applyFilter(q string) {
-	q = strings.TrimSpace(strings.ToLower(q))
-	m.filteredIdxs = m.filteredIdxs[:0]
+// fuzzyScore calculates a fuzzy match score for a query against a target string
+func fuzzyScore(query, target string) int {
+	if query == "" {
+		return 0
+	}
 
-	for i, p := range m.projects {
-		if q == "" ||
-			strings.Contains(strings.ToLower(p.Name), q) ||
-			strings.Contains(strings.ToLower(p.Tag), q) ||
-			strings.Contains(strings.ToLower(p.Description), q) ||
-			strings.Contains(strings.ToLower(p.Path), q) {
+	query = strings.ToLower(query)
+	target = strings.ToLower(target)
+
+	// Exact match gets highest score
+	if strings.Contains(target, query) {
+		return 1000 + (100 - len(target))
+	}
+
+	// Fuzzy matching
+	score := 0
+	queryIdx := 0
+	consecutiveMatches := 0
+
+	for targetIdx := 0; targetIdx < len(target) && queryIdx < len(query); targetIdx++ {
+		if target[targetIdx] == query[queryIdx] {
+			score += 10 + consecutiveMatches*5 // Bonus for consecutive matches
+			consecutiveMatches++
+			queryIdx++
+
+			// Bonus if match is at word boundary
+			if targetIdx == 0 || !unicode.IsLetter(rune(target[targetIdx-1])) {
+				score += 20
+			}
+		} else {
+			consecutiveMatches = 0
+		}
+	}
+
+	// Penalty for unmatched query characters
+	if queryIdx < len(query) {
+		return 0 // Not all query characters matched
+	}
+
+	return score
+}
+
+func (m *model) applyFilter(q string) {
+	m.filterQuery = q
+	q = strings.TrimSpace(q)
+
+	if q == "" {
+		// No filter, show all projects sorted by UpdatedAt
+		m.filteredIdxs = m.filteredIdxs[:0]
+		for i := range m.projects {
 			m.filteredIdxs = append(m.filteredIdxs, i)
+		}
+	} else {
+		// Fuzzy match and score
+		var matches []fuzzyMatch
+		for i, p := range m.projects {
+			// Calculate score from all searchable fields
+			nameScore := fuzzyScore(q, p.Name)
+			tagScore := fuzzyScore(q, p.Tag)
+			descScore := fuzzyScore(q, p.Description)
+			pathScore := fuzzyScore(q, p.Path) / 2 // Lower weight for path
+
+			maxScore := nameScore
+			if tagScore > maxScore {
+				maxScore = tagScore
+			}
+			if descScore > maxScore {
+				maxScore = descScore
+			}
+			if pathScore > maxScore {
+				maxScore = pathScore
+			}
+
+			if maxScore > 0 {
+				matches = append(matches, fuzzyMatch{index: i, score: maxScore})
+			}
+		}
+
+		// Sort by score descending
+		sort.Slice(matches, func(i, j int) bool {
+			return matches[i].score > matches[j].score
+		})
+
+		// Extract indices
+		m.filteredIdxs = m.filteredIdxs[:0]
+		for _, match := range matches {
+			m.filteredIdxs = append(m.filteredIdxs, match.index)
 		}
 	}
 
@@ -298,9 +411,11 @@ func (m *model) applyFilter(q string) {
 		m.viewport.SetContent(lipgloss.NewStyle().
 			Foreground(mutedColor).
 			Italic(true).
-			Render("No projects match your filter"))
+			Align(lipgloss.Center).
+			Render("✨ No projects match your search\n\nTry a different query or press 'a' to add a new project"))
 		return
 	}
+
 	if m.cursor >= len(m.filteredIdxs) {
 		m.cursor = 0
 	}
@@ -312,7 +427,8 @@ func (m *model) loadSelectedToViewport() {
 		m.viewport.SetContent(lipgloss.NewStyle().
 			Foreground(mutedColor).
 			Italic(true).
-			Render("No projects available"))
+			Align(lipgloss.Center).
+			Render("📂 No projects available\n\nPress 'a' to add your first project"))
 		return
 	}
 	idx := m.filteredIdxs[m.cursor]
@@ -320,27 +436,28 @@ func (m *model) loadSelectedToViewport() {
 
 	var content strings.Builder
 
-	content.WriteString(detailLabelStyle.Render("Project Name") + "\n")
+	// Project name with icon
+	content.WriteString(detailLabelStyle.Render("📦 Project Name") + "\n")
 	content.WriteString(detailValueStyle.Render(p.Name) + "\n")
-	content.WriteString(dividerStyle.Render("─────────────────────────────────") + "\n")
+	content.WriteString(dividerStyle.Render("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━") + "\n")
 
 	if p.Tag != "" {
-		content.WriteString(detailLabelStyle.Render("Tag") + "\n")
+		content.WriteString(detailLabelStyle.Render("🏷️  Tag") + "\n")
 		content.WriteString(tagStyle.Render("# "+p.Tag) + "\n")
-		content.WriteString(dividerStyle.Render("─────────────────────────────────") + "\n")
+		content.WriteString(dividerStyle.Render("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━") + "\n")
 	}
 
-	content.WriteString(detailLabelStyle.Render("Path") + "\n")
+	content.WriteString(detailLabelStyle.Render("📁 Path") + "\n")
 	content.WriteString(pathStyle.Render(p.Path) + "\n")
-	content.WriteString(dividerStyle.Render("─────────────────────────────────") + "\n")
+	content.WriteString(dividerStyle.Render("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━") + "\n")
 
 	if p.Description != "" {
-		content.WriteString(detailLabelStyle.Render("Description") + "\n")
+		content.WriteString(detailLabelStyle.Render("📝 Description") + "\n")
 		content.WriteString(detailValueStyle.Render(p.Description) + "\n")
-		content.WriteString(dividerStyle.Render("─────────────────────────────────") + "\n")
+		content.WriteString(dividerStyle.Render("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━") + "\n")
 	}
 
-	content.WriteString(detailLabelStyle.Render("Timeline") + "\n")
+	content.WriteString(detailLabelStyle.Render("🕐 Timeline") + "\n")
 	content.WriteString(lipgloss.NewStyle().Foreground(mutedColor).Render(
 		fmt.Sprintf("Created:  %s\nModified: %s",
 			p.CreatedAt.Format("Jan 02, 2006 15:04"),
@@ -349,13 +466,32 @@ func (m *model) loadSelectedToViewport() {
 	m.viewport.SetContent(content.String())
 }
 
+// highlightMatches highlights the matched characters in a string
+func highlightMatches(query, target string) string {
+	if query == "" {
+		return target
+	}
+
+	query = strings.ToLower(query)
+	targetLower := strings.ToLower(target)
+
+	// Check for exact substring match first
+	if idx := strings.Index(targetLower, query); idx != -1 {
+		before := target[:idx]
+		match := target[idx : idx+len(query)]
+		after := target[idx+len(query):]
+		return before + matchHighlightStyle.Render(match) + after
+	}
+
+	return target
+}
+
 // validatePath checks if the path exists and returns an error message if not
 func validatePath(path string) string {
 	if path == "" {
 		return ""
 	}
 
-	// Expand ~ to home directory
 	if strings.HasPrefix(path, "~") {
 		home, err := os.UserHomeDir()
 		if err == nil {
@@ -363,7 +499,6 @@ func validatePath(path string) string {
 		}
 	}
 
-	// Check if path exists
 	info, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -372,12 +507,11 @@ func validatePath(path string) string {
 		return fmt.Sprintf("⚠ Error: %v", err)
 	}
 
-	// Optionally check if it's a directory
 	if !info.IsDir() {
 		return "⚠ Path is not a directory"
 	}
 
-	return "" // Valid path
+	return ""
 }
 
 // expandPath expands ~ to home directory and makes path absolute
@@ -402,7 +536,6 @@ func autocomplete(currentPath string) (string, []string) {
 		currentPath = "."
 	}
 
-	// Expand ~ to home directory
 	if strings.HasPrefix(currentPath, "~") {
 		home, err := os.UserHomeDir()
 		if err == nil {
@@ -410,33 +543,27 @@ func autocomplete(currentPath string) (string, []string) {
 		}
 	}
 
-	// Split into directory and prefix
 	dir := filepath.Dir(currentPath)
 	prefix := filepath.Base(currentPath)
 
-	// If the path ends with /, we're looking for completions in that directory
 	if strings.HasSuffix(currentPath, string(filepath.Separator)) {
 		dir = currentPath
 		prefix = ""
 	}
 
-	// Read directory entries
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return currentPath, nil
 	}
 
-	// Find matching entries
 	var matches []string
 	for _, entry := range entries {
 		name := entry.Name()
 
-		// Skip hidden files unless prefix starts with .
 		if strings.HasPrefix(name, ".") && !strings.HasPrefix(prefix, ".") {
 			continue
 		}
 
-		// Check if entry matches prefix
 		if strings.HasPrefix(name, prefix) {
 			fullPath := filepath.Join(dir, name)
 			if entry.IsDir() {
@@ -446,15 +573,12 @@ func autocomplete(currentPath string) (string, []string) {
 		}
 	}
 
-	// Sort matches
 	sort.Strings(matches)
 
-	// If exactly one match, return it
 	if len(matches) == 1 {
 		return matches[0], nil
 	}
 
-	// If multiple matches, find common prefix
 	if len(matches) > 1 {
 		common := longestCommonPrefix(matches)
 		if common != currentPath && common != "" {
@@ -507,7 +631,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		k := msg.String()
 
 		if m.mode == viewAdd {
-			// Handle tab completion for path field
 			if k == "tab" && m.addFocusIndex == 1 {
 				currentPath := m.addInputs[1].Value()
 				completed, matches := autocomplete(currentPath)
@@ -516,10 +639,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.addInputs[1].SetValue(completed)
 					m.addInputs[1].SetCursor(len(completed))
 
-					// Clear autocomplete options if we got a single match
 					if len(matches) == 0 {
 						m.autocompleteOpts = nil
-						// Validate the completed path
 						m.pathValidation = validatePath(completed)
 					} else {
 						m.autocompleteOpts = matches
@@ -558,7 +679,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.autocompleteOpts = nil
 				return m, nil
 			case "down":
-				// Only navigate down if not showing autocomplete options
 				if len(m.autocompleteOpts) == 0 {
 					m.addFocusIndex++
 					if m.addFocusIndex > len(m.addInputs) {
@@ -586,7 +706,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return m, nil
 					}
 
-					// Validate path before adding
 					validation := validatePath(path)
 					if validation != "" {
 						m.statusMessage = "Cannot add project: " + strings.TrimPrefix(validation, "⚠ ")
@@ -595,7 +714,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return m, nil
 					}
 
-					// Expand and use absolute path
 					path = expandPath(path)
 
 					project := Project{
@@ -622,7 +740,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					return m, nil
 				} else {
-					// Move to next field on enter
 					m.addFocusIndex++
 					if m.addFocusIndex > len(m.addInputs) {
 						m.addFocusIndex = len(m.addInputs)
@@ -644,12 +761,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				oldValue := m.addInputs[m.addFocusIndex].Value()
 				m.addInputs[m.addFocusIndex], cmd = m.addInputs[m.addFocusIndex].Update(msg)
 
-				// Validate path in real-time if it's the path field
 				if m.addFocusIndex == 1 {
 					newValue := m.addInputs[1].Value()
 					if newValue != oldValue {
 						m.pathValidation = validatePath(newValue)
-						m.autocompleteOpts = nil // Clear autocomplete when typing
+						m.autocompleteOpts = nil
 					}
 				}
 
@@ -660,28 +776,57 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if m.filterMode {
 			switch k {
-			case "enter":
-				m.filterMode = false
-				m.applyFilter(m.textInput.Value())
-				if m.textInput.Value() != "" {
-					m.statusMessage = fmt.Sprintf("✓ Filtered by '%s'", m.textInput.Value())
-					m.isError = false
-				}
-				return m, nil
 			case "esc":
 				m.filterMode = false
-				m.textInput.SetValue("")
-				m.applyFilter("")
-				m.statusMessage = "Filter cleared"
-				m.isError = false
+				m.textInput.Blur()
+				m.statusMessage = ""
 				return m, nil
+			case "enter":
+				// Open the selected project with Enter
+				if len(m.filteredIdxs) == 0 {
+					m.statusMessage = "No project to open"
+					m.isError = true
+					return m, nil
+				}
+				m.filterMode = false
+				m.textInput.Blur()
+				idx := m.filteredIdxs[m.cursor]
+				path := m.projects[idx].Path
+				m.projects[idx].UpdatedAt = time.Now()
+				m.saveProjects()
+				m.statusMessage = fmt.Sprintf("Opening '%s'...", m.projects[idx].Name)
+				m.isError = false
+				return m, openProjectCmd(path)
+			case "down", "ctrl+n":
+				// Navigate down while filtering
+				if len(m.filteredIdxs) > 0 {
+					m.cursor = (m.cursor + 1) % len(m.filteredIdxs)
+					m.loadSelectedToViewport()
+				}
+				return m, nil
+			case "up", "ctrl+p":
+				// Navigate up while filtering
+				if len(m.filteredIdxs) > 0 {
+					m.cursor = (m.cursor - 1 + len(m.filteredIdxs)) % len(m.filteredIdxs)
+					m.loadSelectedToViewport()
+				}
+				return m, nil
+			case "ctrl+c":
+				return m, tea.Quit
 			default:
 				var cmd tea.Cmd
+				oldValue := m.textInput.Value()
 				m.textInput, cmd = m.textInput.Update(msg)
+
+				// Real-time filtering
+				newValue := m.textInput.Value()
+				if newValue != oldValue {
+					m.applyFilter(newValue)
+				}
+
 				return m, cmd
 			}
 		}
-
 		switch k {
 		case "q", "ctrl+c":
 			return m, tea.Quit
@@ -699,6 +844,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "/":
 			m.filterMode = true
 			m.textInput.Focus()
+			m.statusMessage = ""
 			return m, nil
 		case "j", "down":
 			if len(m.filteredIdxs) > 0 {
@@ -806,32 +952,31 @@ func (m model) View() string {
 		header := lipgloss.NewStyle().
 			Foreground(primaryColor).
 			Bold(true).
-			Background(lipgloss.Color("#1F2937")).
+			Background(bgColor).
 			Padding(1, 2).
 			MarginBottom(2).
 			Width(70).
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(primaryColor).
 			Render("✨ Add New Project")
 
 		b.WriteString(header + "\n\n")
 
-		labels := []string{"Project Name", "Project Path", "Tags", "Description"}
+		labels := []string{"📦 Project Name", "📁 Project Path", "🏷️  Tags", "📝 Description"}
 		for i, input := range m.addInputs {
 			b.WriteString(labelStyle.Render(labels[i]) + "\n")
 			b.WriteString(input.View() + "\n")
 
-			// Show path validation message for path field
 			if i == 1 && m.pathValidation != "" {
 				b.WriteString(warningStyle.Render(m.pathValidation) + "\n")
 			}
 
-			// Show autocomplete options for path field
 			if i == 1 && len(m.autocompleteOpts) > 0 && m.addFocusIndex == 1 {
 				b.WriteString(lipgloss.NewStyle().
 					Foreground(mutedColor).
 					Italic(true).
-					Render(fmt.Sprintf("  %d matches - press tab again to cycle", len(m.autocompleteOpts))) + "\n")
+					Render(fmt.Sprintf("  💡 %d matches - press tab again to cycle", len(m.autocompleteOpts))) + "\n")
 
-				// Show first few matches
 				maxShow := 5
 				if len(m.autocompleteOpts) < maxShow {
 					maxShow = len(m.autocompleteOpts)
@@ -851,14 +996,14 @@ func (m model) View() string {
 
 		submitBtn := "[ Submit ]"
 		if m.addFocusIndex == len(m.addInputs) {
-			submitBtn = focusedButtonStyle.Render("Submit")
+			submitBtn = focusedButtonStyle.Render("  Submit  ")
 		} else {
-			submitBtn = blurredButtonStyle.Render("Submit")
+			submitBtn = blurredButtonStyle.Render("  Submit  ")
 		}
 
 		b.WriteString("\n" + submitBtn + "\n\n")
 
-		helpText := helpStyle.Render("tab: autocomplete/navigate • shift+tab: back • enter: submit • esc: cancel")
+		helpText := helpStyle.Render("tab: autocomplete/next • shift+tab: previous • enter: submit • esc: cancel")
 		b.WriteString(helpText)
 
 		if m.statusMessage != "" {
@@ -878,51 +1023,66 @@ func (m model) View() string {
 
 	var b strings.Builder
 
-	// Header
+	// Header with counter
 	header := titleStyle.Render("📚 Project Phonebook")
-	subtitle := subtitleStyle.Render(fmt.Sprintf("%d projects", len(m.projects)))
-	b.WriteString(header + " " + subtitle + "\n\n")
+	count := counterStyle.Render(fmt.Sprintf("%d", len(m.projects)))
+	if m.filterQuery != "" {
+		filteredCount := counterStyle.Render(fmt.Sprintf("%d/%d", len(m.filteredIdxs), len(m.projects)))
+		b.WriteString(header + " " + filteredCount + "\n\n")
+	} else {
+		b.WriteString(header + " " + count + "\n\n")
+	}
 
 	// Filter input
 	if m.filterMode {
-		filterBox := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(primaryColor).
-			Padding(0, 1).
-			Width(40).
-			Render(m.textInput.View())
+		filterBox := filterBoxStyle.Render(m.textInput.View())
 		b.WriteString(filterBox + "\n\n")
+	} else if m.filterQuery != "" {
+		// Show active filter even when not in filter mode
+		activeFilter := lipgloss.NewStyle().
+			Foreground(mutedColor).
+			Italic(true).
+			Render("🔍 Filter: " + m.filterQuery + " (press / to edit)")
+		b.WriteString(activeFilter + "\n\n")
 	}
 
 	// Project list
+	displayCount := 0
+	maxDisplay := 25
+
 	for i, idx := range m.filteredIdxs {
+		if displayCount >= maxDisplay {
+			remaining := len(m.filteredIdxs) - displayCount
+			b.WriteString(lipgloss.NewStyle().
+				Foreground(mutedColor).
+				Italic(true).
+				Render(fmt.Sprintf("   ... and %d more (scroll with j/k)", remaining)) + "\n")
+			break
+		}
+
 		p := m.projects[idx]
 
 		var line string
+		displayName := highlightMatches(m.filterQuery, p.Name)
+
 		if i == m.cursor {
-			line = selectedItemStyle.Render("▶ " + p.Name)
+			line = selectedItemStyle.Render("▶ " + displayName)
 		} else {
-			line = normalItemStyle.Render(p.Name)
+			line = normalItemStyle.Render(displayName)
 		}
 		b.WriteString(line + "\n")
 
 		// Tag and path
 		var metadata strings.Builder
 		if p.Tag != "" {
-			metadata.WriteString(tagStyle.Render(" #" + p.Tag))
+			highlightedTag := highlightMatches(m.filterQuery, p.Tag)
+			metadata.WriteString(tagStyle.Render(" #" + highlightedTag))
 		}
 		metadata.WriteString("\n")
 		metadata.WriteString(pathStyle.Render("   " + truncate(p.Path, 38)))
 
 		b.WriteString(metadata.String() + "\n\n")
-
-		if i >= 30 {
-			b.WriteString(lipgloss.NewStyle().
-				Foreground(mutedColor).
-				Italic(true).
-				Render("   ... and more") + "\n")
-			break
-		}
+		displayCount++
 	}
 
 	left := leftPanelStyle.
@@ -943,7 +1103,7 @@ func (m model) View() string {
 		helpKey("o/↵", "open"),
 		helpKey("a", "add"),
 		helpKey("d", "delete"),
-		helpKey("/", "filter"),
+		helpKey("/", "fuzzy search"),
 		helpKey("r", "reload"),
 		helpKey("q", "quit"),
 	}
@@ -963,7 +1123,7 @@ func (m model) View() string {
 }
 
 func helpKey(key, desc string) string {
-	return lipgloss.NewStyle().Foreground(primaryColor).Render(key) +
+	return lipgloss.NewStyle().Foreground(primaryColor).Bold(true).Render(key) +
 		lipgloss.NewStyle().Foreground(mutedColor).Render(" "+desc)
 }
 
@@ -975,19 +1135,15 @@ func truncate(s string, max int) string {
 }
 
 func openProjectCmd(path string) tea.Cmd {
-	// Check if path exists first
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return func() tea.Msg {
 			return editorFinishedMsg{err: fmt.Errorf("path does not exist: %s", path)}
 		}
 	}
 
-	// Create the command
 	c := exec.Command("nvim", ".")
-	c.Dir = path // Set working directory to project path
+	c.Dir = path
 
-	// DON'T manually set Stdin/Stdout/Stderr - tea.ExecProcess handles it
-	// Return tea.ExecProcess directly
 	return tea.ExecProcess(c, func(err error) tea.Msg {
 		return editorFinishedMsg{err: err}
 	})
