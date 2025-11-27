@@ -2,7 +2,7 @@
 
 A beautiful, blazingly fast terminal-based project manager built with Go and [Bubble Tea](https://github.com/charmbracelet/bubbletea). Quickly navigate, search, and open your projects from the command line.
 
-![Project Phonebook Demo](demo.gif)
+![Project Phonebook Demo](assets/demo.gif)
 <!-- TODO: Add a demo gif showing the TUI in action -->
 
 ## Features
