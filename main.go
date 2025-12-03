@@ -208,7 +208,7 @@ func initialModel() model {
 	os.MkdirAll(filepath.Dir(projectsFile), 0o755)
 
 	ti := textinput.New()
-	ti.Placeholder = "🔍 Type to search (fuzzy)..."
+	ti.Placeholder = "Press / to search projects..."
 	ti.PlaceholderStyle = lipgloss.NewStyle().Foreground(mutedColor).Italic(true)
 	ti.PromptStyle = lipgloss.NewStyle().Foreground(primaryColor).Bold(true)
 	ti.TextStyle = lipgloss.NewStyle().Foreground(textColor)
@@ -779,6 +779,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "esc":
 				m.filterMode = false
 				m.textInput.Blur()
+				m.textInput.SetValue("")
+				m.applyFilter("")
 				m.statusMessage = ""
 				return m, nil
 			case "enter":
@@ -1021,74 +1023,107 @@ func (m model) View() string {
 			Render(b.String())
 	}
 
-	var b strings.Builder
+	var leftContent strings.Builder
 
-	// Header with counter
+	// Header with counter (2 lines)
 	header := titleStyle.Render(" Project Phonebook")
 	count := counterStyle.Render(fmt.Sprintf("%d", len(m.projects)))
 	if m.filterQuery != "" {
 		filteredCount := counterStyle.Render(fmt.Sprintf("%d/%d", len(m.filteredIdxs), len(m.projects)))
-		b.WriteString(header + " " + filteredCount + "\n\n")
+		leftContent.WriteString(header + " " + filteredCount + "\n\n")
 	} else {
-		b.WriteString(header + " " + count + "\n\n")
+		leftContent.WriteString(header + " " + count + "\n\n")
 	}
 
-	// Filter input
-	if m.filterMode {
-		filterBox := filterBoxStyle.Render(m.textInput.View())
-		b.WriteString(filterBox + "\n\n")
-	} else if m.filterQuery != "" {
-		// Show active filter even when not in filter mode
-		activeFilter := lipgloss.NewStyle().
+	// Filter input - always show it (2 lines with spacing)
+	filterBox := filterBoxStyle.Render(m.textInput.View())
+	leftContent.WriteString(filterBox + "\n\n")
+
+	// Calculate how many items can fit
+	// Fixed header elements take up specific lines
+	// - Header: 2 lines
+	// - Filter box: 2 lines
+	// - Border padding: ~4 lines
+	// Each project item: 4 lines
+	fixedHeaderLines := 8
+	linesPerItem := 4
+
+	availableLines := m.viewport.Height - fixedHeaderLines
+	if availableLines < 0 {
+		availableLines = 4
+	}
+	maxDisplay := availableLines / linesPerItem
+	if maxDisplay < 1 {
+		maxDisplay = 1
+	}
+
+	// Calculate scroll window
+	startIdx := 0
+	endIdx := len(m.filteredIdxs)
+
+	if len(m.filteredIdxs) > maxDisplay {
+		// Center the cursor in the visible window
+		startIdx = m.cursor - maxDisplay/2
+		if startIdx < 0 {
+			startIdx = 0
+		}
+		endIdx = startIdx + maxDisplay
+		if endIdx > len(m.filteredIdxs) {
+			endIdx = len(m.filteredIdxs)
+			startIdx = endIdx - maxDisplay
+			if startIdx < 0 {
+				startIdx = 0
+			}
+		}
+	}
+
+	// Render only the items that fit
+	if len(m.filteredIdxs) == 0 {
+		leftContent.WriteString(lipgloss.NewStyle().
 			Foreground(mutedColor).
 			Italic(true).
-			Render(" Filter: " + m.filterQuery + " (press / to edit)")
-		b.WriteString(activeFilter + "\n\n")
-	}
+			Render("✨ No projects match\n\nPress 'a' to add one"))
+	} else {
+		for i := startIdx; i < endIdx; i++ {
+			idx := m.filteredIdxs[i]
+			p := m.projects[idx]
 
-	// Project list
-	displayCount := 0
-	maxDisplay := 25
+			var line string
+			displayName := highlightMatches(m.filterQuery, p.Name)
 
-	for i, idx := range m.filteredIdxs {
-		if displayCount >= maxDisplay {
-			remaining := len(m.filteredIdxs) - displayCount
-			b.WriteString(lipgloss.NewStyle().
+			if i == m.cursor {
+				line = selectedItemStyle.Render("▶ " + displayName)
+			} else {
+				line = normalItemStyle.Render(displayName)
+			}
+			leftContent.WriteString(line + "\n")
+
+			// Tag and path
+			var metadata strings.Builder
+			if p.Tag != "" {
+				highlightedTag := highlightMatches(m.filterQuery, p.Tag)
+				metadata.WriteString(tagStyle.Render(" #" + highlightedTag))
+			}
+			metadata.WriteString("\n")
+			metadata.WriteString(pathStyle.Render("   " + truncate(p.Path, 38)))
+
+			leftContent.WriteString(metadata.String() + "\n\n")
+		}
+
+		// Show scroll indicator if needed
+		if len(m.filteredIdxs) > maxDisplay {
+			scrollInfo := fmt.Sprintf("   [%d-%d of %d]", startIdx+1, endIdx, len(m.filteredIdxs))
+			leftContent.WriteString(lipgloss.NewStyle().
 				Foreground(mutedColor).
 				Italic(true).
-				Render(fmt.Sprintf("   ... and %d more (scroll with j/k)", remaining)) + "\n")
-			break
+				Render(scrollInfo))
 		}
-
-		p := m.projects[idx]
-
-		var line string
-		displayName := highlightMatches(m.filterQuery, p.Name)
-
-		if i == m.cursor {
-			line = selectedItemStyle.Render("▶ " + displayName)
-		} else {
-			line = normalItemStyle.Render(displayName)
-		}
-		b.WriteString(line + "\n")
-
-		// Tag and path
-		var metadata strings.Builder
-		if p.Tag != "" {
-			highlightedTag := highlightMatches(m.filterQuery, p.Tag)
-			metadata.WriteString(tagStyle.Render(" #" + highlightedTag))
-		}
-		metadata.WriteString("\n")
-		metadata.WriteString(pathStyle.Render("   " + truncate(p.Path, 38)))
-
-		b.WriteString(metadata.String() + "\n\n")
-		displayCount++
 	}
 
 	left := leftPanelStyle.
 		Width(m.leftWidth).
 		Height(m.viewport.Height).
-		Render(b.String())
+		Render(leftContent.String())
 
 	right := rightPanelStyle.
 		Width(m.viewport.Width).
@@ -1103,7 +1138,8 @@ func (m model) View() string {
 		helpKey("o/↵", "open"),
 		helpKey("a", "add"),
 		helpKey("d", "delete"),
-		helpKey("/", "fuzzy search"),
+		helpKey("/", "search"),
+		helpKey("esc", "clear search"),
 		helpKey("r", "reload"),
 		helpKey("q", "quit"),
 	}
