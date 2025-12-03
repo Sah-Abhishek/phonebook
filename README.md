@@ -21,7 +21,7 @@ A beautiful, blazingly fast terminal-based project manager built with Go and [Bu
 
 ### Using Go Install
 ```bash
-go install github.com/yourusername/project-phonebook@latest
+go install github.com/sah-abhishek/phonebook@latest
 ```
 
 ### From Source
@@ -233,7 +233,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## Support
 
 If you encounter any issues or have questions:
-- Open an issue on [GitHub Issues](https://github.com/yourusername/project-phonebook/issues)
+- Open an issue on [GitHub Issues](https://github.com/sah-abhishek/phonebook/issues)
 - Check existing issues for solutions
 
 ---
